@@ -198,6 +198,20 @@ local user_opts = {
     persistent_progress_height = 17,       -- height of the persistent progress bar
     persistent_buffer = false,             -- show cached buffer status in the persistent progress line
 
+    -- IntroDB integration settings
+    introdb_enable = true,                 -- enable IntroDB integration
+    introdb_api_url = "https://api.introdb.app", -- IntroDB API base URL
+    introdb_auto_skip = "no",              -- auto-skip: "no", "all", "intro", "recap", "outro"
+    introdb_button_duration = 7,           -- seconds to show skip button upon entering segment (0 = full segment)
+    introdb_button_position = "bottom_right", -- skip button position: "bottom_right" or "bottom_center"
+    introdb_show_highlights = true,        -- show segment highlights on the seekbar
+    introdb_range_alpha = 150,             -- alpha of segment highlights on seekbar (0 - 255)
+    introdb_intro_color = "#5C7CFA",       -- color of intro highlight
+    introdb_recap_color = "#20C997",       -- color of recap highlight
+    introdb_outro_color = "#FD7E14",       -- color of outro highlight
+    introdb_post_credits_color = "#BE4BDB",-- color of post-credits highlight
+    introdb_guessit_fallback = true,       -- use guessit and search API fallback if user-data is missing
+
     -- Miscellaneous settings
     visibility = "auto",                   -- only used at init to set visibility_mode(...)
     visibility_modes = "never_auto_always",-- visibility modes to cycle through
@@ -426,6 +440,11 @@ local language = {
         downloading = "Downloading",
         downloaded = "Already downloaded",
         menu = "Menu",
+        skip_intro = "Skip Intro",
+        skip_recap = "Skip Recap",
+        skip_outro = "Skip Outro",
+        skip_post_credits = "Skip Credits",
+        skipped_segment = "Skipped %s",
     },
 }
 
@@ -652,6 +671,17 @@ local state = {
     title_max_w = nil,
     windowtitle_max_w = nil,
     chapter_title_max_w = nil,
+    introdb = {
+        imdb_id = nil,
+        season = nil,
+        episode = nil,
+        is_movie = false,
+        segments = {},
+        active_segment = nil,
+        button_shown_time = 0,
+        button_visible = false,
+        button_alpha = 255,
+    },
 }
 
 local logo_lines = {
@@ -1449,6 +1479,56 @@ local function draw_ab_loop_range(element, elem_ass)
     elem_ass:rect_cw(ax, slider_lo.gap, bx, elem_geo.h - slider_lo.gap)
 end
 
+local function draw_introdb_ranges(element, elem_ass)
+    if element.name ~= "seekbar" or not user_opts.introdb_enable or not user_opts.introdb_show_highlights then return end
+    if not state.duration or state.duration <= 0 or not state.introdb or not state.introdb.segments or #state.introdb.segments == 0 then return end
+
+    local slider_lo = element.layout.slider
+    local elem_geo = element.layout.geometry
+    local radius = slider_lo.radius or 0
+    local gap_half = 1.5
+    local cuts = (slider_lo.nibbles_style == "gap") and collect_gap_cuts(element) or {}
+
+    local type_colors = {
+        intro = user_opts.introdb_intro_color or "#5C7CFA",
+        recap = user_opts.introdb_recap_color or "#20C997",
+        outro = user_opts.introdb_outro_color or "#FD7E14",
+        post_credits = user_opts.introdb_post_credits_color or "#BE4BDB",
+    }
+
+    for _, seg in ipairs(state.introdb.segments) do
+        local color = type_colors[seg.type] or user_opts.introdb_intro_color
+        local ax = get_slider_ele_pos_for(element, math.max(0, seg.start_sec) / state.duration * 100)
+        local bx = get_slider_ele_pos_for(element, math.min(state.duration, seg.end_sec) / state.duration * 100)
+
+        if bx > ax then
+            elem_ass:draw_stop()
+            elem_ass:merge(element.style_ass)
+            ass_append_alpha(elem_ass, element.layout.alpha, user_opts.introdb_range_alpha or 150)
+            elem_ass:append("{\\1c&H" .. osc_color_convert(color) .. "&}")
+            elem_ass:merge(element.static_ass)
+
+            local seg_start = ax
+            for _, cut in ipairs(cuts) do
+                local gap_l, gap_r = cut - gap_half, cut + gap_half
+                if gap_r > ax and gap_l < bx then
+                    local sl, sr = seg_start, math.min(gap_l, bx)
+                    if sr > sl then
+                        elem_ass:round_rect_cw(sl, slider_lo.gap, sr, elem_geo.h - slider_lo.gap, (sl == ax and sl < element.slider.min.ele_pos) and radius or 0, 0)
+                    end
+                    seg_start = math.max(gap_r, ax)
+                end
+            end
+            local sl, sr = seg_start, bx
+            if sr > sl then
+                local r_right = (sr >= elem_geo.w or sr > element.slider.max.ele_pos) and radius or 0
+                local r_left = (sl == ax and sl < element.slider.min.ele_pos) and radius or 0
+                elem_ass:round_rect_cw(sl, slider_lo.gap, sr, elem_geo.h - slider_lo.gap, r_left, r_right)
+            end
+        end
+    end
+end
+
 local function draw_seekbar_nibbles(element, elem_ass)
     local slider_lo = element.layout.slider
     local elem_geo = element.layout.geometry
@@ -1650,6 +1730,7 @@ local function render_elements(master_ass, osc_vis, wc_vis)
                 draw_seekbar_progress(element, elem_ass)
                 draw_seekbar_ranges(element, elem_ass, handle_x, handle_radius)
                 draw_ab_loop_range(element, elem_ass)
+                draw_introdb_ranges(element, elem_ass)
                 draw_seekbar_handle(element, elem_ass, handle_x, handle_radius, anim_override, is_active) -- draw handle on top of progress
 
                 elem_ass:draw_stop()
@@ -1665,6 +1746,21 @@ local function render_elements(master_ass, osc_vis, wc_vis)
                     if mouse_hit(element) or force_seek_tooltip then
                         local sliderpos = get_slider_value(element)
                         local tooltiplabel = element.slider.tooltipF(sliderpos)
+
+                        -- Add IntroDB segment name to tooltip if hovered
+                        if element.name == "seekbar" and user_opts.introdb_enable and state.introdb and state.introdb.segments and #state.introdb.segments > 0 then
+                            local dur = state.duration or 0
+                            if dur > 0 then
+                                local hover_sec = sliderpos * dur / 100
+                                for _, seg in ipairs(state.introdb.segments) do
+                                    if hover_sec >= seg.start_sec and hover_sec <= seg.end_sec then
+                                        tooltiplabel = tooltiplabel .. " • " .. (seg.label or seg.type)
+                                        break
+                                    end
+                                end
+                            end
+                        end
+
                         local an = slider_lo.tooltip_an
                         local ty
                         if an == 2 then
@@ -1961,6 +2057,376 @@ local function download_done(success, _, error)
         msg.info("Download failed")
     end
     state.downloading = false
+end
+
+--
+-- IntroDB State and API Client
+--
+local function reset_introdb_state()
+    state.introdb = {
+        imdb_id = nil,
+        season = nil,
+        episode = nil,
+        is_movie = false,
+        segments = {},
+        active_segment = nil,
+        button_shown_time = 0,
+        button_visible = false,
+        button_alpha = 255,
+    }
+end
+
+local function parse_introdb_response(json_str)
+    if not json_str or json_str == "" then return nil end
+    local data, err = utils.parse_json(json_str)
+    if not data or type(data) ~= "table" then
+        msg.debug("IntroDB: JSON parse error: " .. tostring(err))
+        return nil
+    end
+
+    local seg_keys = {
+        { key = "intro", label = locale and locale.skip_intro or "Skip Intro" },
+        { key = "recap", label = locale and locale.skip_recap or "Skip Recap" },
+        { key = "outro", label = locale and locale.skip_outro or "Skip Outro" },
+        { key = "post_credits", label = locale and locale.skip_post_credits or "Skip Credits" }
+    }
+
+    local segments = {}
+    for _, item in ipairs(seg_keys) do
+        local seg = data[item.key]
+        if seg and type(seg) == "table" and seg.start_sec and seg.end_sec then
+            local start_s = tonumber(seg.start_sec)
+            local end_s = tonumber(seg.end_sec)
+            if start_s and end_s and end_s > start_s then
+                table.insert(segments, {
+                    type = item.key,
+                    start_sec = start_s,
+                    end_sec = end_s,
+                    label = item.label
+                })
+            end
+        end
+    end
+
+    table.sort(segments, function(a, b) return a.start_sec < b.start_sec end)
+    return segments
+end
+
+local function fetch_introdb_segments(imdb_id, season, episode, is_movie, callback)
+    if not user_opts.introdb_enable or not imdb_id or imdb_id == "" then return end
+
+    local base_url = user_opts.introdb_api_url:gsub("/+$", "") .. "/segments"
+    local url
+    if is_movie then
+        url = string.format("%s?imdb_id=%s&is_movie=true", base_url, imdb_id)
+    else
+        if not season or not episode then return end
+        url = string.format("%s?imdb_id=%s&season=%d&episode=%d", base_url, imdb_id, tonumber(season) or 1, tonumber(episode) or 1)
+    end
+
+    msg.info("IntroDB fetching segments: " .. url)
+    exec({"curl", "-s", "-f", "--max-time", "4", url}, function(success, result, err)
+        if success and result and result.stdout and result.stdout ~= "" then
+            local segments = parse_introdb_response(result.stdout)
+            if segments and #segments > 0 then
+                state.introdb.segments = segments
+                state.introdb.imdb_id = imdb_id
+                state.introdb.season = season
+                state.introdb.episode = episode
+                state.introdb.is_movie = is_movie
+                msg.info(string.format("IntroDB: Loaded %d segments for %s", #segments, imdb_id))
+                request_tick()
+            else
+                msg.debug("IntroDB: No segments found in response")
+            end
+            if callback then callback(segments) end
+        else
+            msg.debug("IntroDB: Fetch failed or timeout: " .. tostring(err or (result and result.stderr)))
+            if callback then callback(nil) end
+        end
+    end)
+end
+
+local function url_encode(str)
+    if not str then return "" end
+    return str:gsub("\n", "\r\n")
+              :gsub("([^%w %-%_%.%~])", function(c) return string.format("%%%02X", string.byte(c)) end)
+              :gsub(" ", "%%20")
+end
+
+local function parse_path_metadata(path)
+    if not path or path == "" then return {} end
+    local meta = {}
+
+    -- Extract IMDb ID from filename or directory
+    meta.imdb_id = path:match("([tT][tT]%d%d%d%d%d%d%d%d?)")
+    if meta.imdb_id then
+        meta.imdb_id = meta.imdb_id:lower()
+    end
+
+    -- Extract Season & Episode
+    local s, e = path:match("[sS](%d+)[eE](%d+)")
+    if not s then
+        s, e = path:match("(%d+)[xX](%d+)")
+    end
+    if not s then
+        s, e = path:match("[sS]eason%s*(%d+).-[eE]pisode%s*(%d+)")
+    end
+
+    if s and e then
+        meta.season = tonumber(s)
+        meta.episode = tonumber(e)
+        meta.is_movie = false
+    else
+        meta.is_movie = true
+    end
+
+    -- Check sibling .nfo file if no imdb_id was found in filename
+    if not meta.imdb_id and not state.is_url then
+        local dir, filename = utils.split_path(path)
+        if dir and filename then
+            local nfo_candidates = {
+                utils.join_path(dir, filename:gsub("%.%w+$", ".nfo")),
+                utils.join_path(dir, "movie.nfo"),
+                utils.join_path(dir, "tvshow.nfo")
+            }
+            for _, nfo_path in ipairs(nfo_candidates) do
+                local nfo_f = io.open(nfo_path, "r")
+                if nfo_f then
+                    local nfo_text = nfo_f:read("*all")
+                    nfo_f:close()
+                    if nfo_text then
+                        local found_id = nfo_text:match("<imdbid>%s*([tT][tT]%d+)%s*</imdbid>")
+                            or nfo_text:match("imdb%.com/title/([tT][tT]%d+)")
+                            or nfo_text:match("([tT][tT]%d%d%d%d%d%d%d%d?)")
+                        if found_id then
+                            meta.imdb_id = found_id:lower()
+                            break
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return meta
+end
+
+local function guessit_lookup(path, callback)
+    if not path or path == "" or state.is_url then
+        if callback then callback(nil) end
+        return
+    end
+
+    exec({"guessit", path, "-j"}, function(success, result, err)
+        if not success or not result or not result.stdout or result.stdout == "" then
+            msg.debug("IntroDB: guessit execution failed: " .. tostring(err))
+            if callback then callback(nil) end
+            return
+        end
+
+        local data = utils.parse_json(result.stdout)
+        if not data or not data.title then
+            msg.debug("IntroDB: guessit did not find title")
+            if callback then callback(nil) end
+            return
+        end
+
+        local is_movie = data.type == "movie"
+        local season = data.season and tonumber(data.season) or nil
+        local episode = data.episode and tonumber(data.episode) or nil
+        local title = tostring(data.title)
+
+        -- Query Cinemeta to resolve Title -> IMDb ID
+        local media_cat = is_movie and "movie" or "series"
+        local search_url = string.format("https://v3-cinemeta.strem.io/catalog/%s/top/search=%s.json", media_cat, url_encode(title))
+        msg.info("IntroDB: Resolving title via Cinemeta: " .. search_url)
+
+        exec({"curl", "-s", "-f", "--max-time", "4", search_url}, function(c_success, c_result, c_err)
+            if c_success and c_result and c_result.stdout and c_result.stdout ~= "" then
+                local c_data = utils.parse_json(c_result.stdout)
+                if c_data and c_data.metas and c_data.metas[1] and c_data.metas[1].id then
+                    local resolved_id = c_data.metas[1].id
+                    msg.info(string.format("IntroDB: Cinemeta resolved %s -> %s", title, resolved_id))
+                    if callback then
+                        callback({
+                            imdb_id = resolved_id,
+                            season = season,
+                            episode = episode,
+                            is_movie = is_movie
+                        })
+                    end
+                    return
+                end
+            end
+
+            msg.debug("IntroDB: Cinemeta resolution failed: " .. tostring(c_err))
+            if callback then callback(nil) end
+        end)
+    end)
+end
+
+local function resolve_media_metadata(callback)
+    -- 1. Check mpv properties first
+    local imdb_id = mp.get_property("user-data/metadata/imdb_id")
+        or mp.get_property("user-data/imdb_id")
+        or mp.get_property("metadata/by-key/IMDB")
+
+    if imdb_id and imdb_id ~= "" then
+        local season = mp.get_property_number("user-data/metadata/season")
+            or mp.get_property_number("user-data/season")
+        local episode = mp.get_property_number("user-data/metadata/episode")
+            or mp.get_property_number("user-data/episode")
+        local is_movie = mp.get_property_bool("user-data/metadata/is_movie")
+            or mp.get_property_bool("user-data/is_movie")
+            or (season == nil and episode == nil)
+
+        if callback then
+            callback({
+                imdb_id = imdb_id,
+                season = season,
+                episode = episode,
+                is_movie = is_movie
+            })
+        end
+        return
+    end
+
+    -- 2. Fallback to path regex & local NFO
+    local path = mp.get_property("path")
+    local path_meta = parse_path_metadata(path)
+    if path_meta.imdb_id then
+        if callback then callback(path_meta) end
+        return
+    end
+
+    -- 3. Fallback to GuessIt + Cinemeta
+    if user_opts.introdb_guessit_fallback and path and path ~= "" then
+        guessit_lookup(path, callback)
+    else
+        if callback then callback(nil) end
+    end
+end
+
+local function skip_current_segment()
+    if state.introdb and state.introdb.active_segment then
+        local target = state.introdb.active_segment.end_sec
+        local label = state.introdb.active_segment.label or state.introdb.active_segment.type
+        mp.commandv("seek", target, "absolute+exact")
+        mp.commandv("show-text", string.format(locale and locale.skipped_segment or "Skipped %s", label), 2000)
+        state.introdb.active_segment = nil
+        state.introdb.button_visible = false
+        state.introdb.capsule_hitbox = nil
+        request_tick()
+    end
+end
+
+local function check_introdb_segment_tick()
+    if not user_opts.introdb_enable or not state.introdb or not state.introdb.segments or #state.introdb.segments == 0 then
+        state.introdb.active_segment = nil
+        state.introdb.button_visible = false
+        state.introdb.capsule_hitbox = nil
+        return
+    end
+
+    local pos = mp.get_property_number("playback-time")
+    if not pos then return end
+
+    local cur_seg = nil
+    for _, seg in ipairs(state.introdb.segments) do
+        if pos >= seg.start_sec and pos < seg.end_sec then
+            cur_seg = seg
+            break
+        end
+    end
+
+    if cur_seg then
+        if state.introdb.active_segment ~= cur_seg then
+            -- Entered new segment
+            local auto = user_opts.introdb_auto_skip
+            if auto == "all" or auto == "yes" or auto == cur_seg.type or (type(auto) == "string" and auto:find(cur_seg.type)) then
+                state.introdb.active_segment = cur_seg
+                skip_current_segment()
+                return
+            end
+
+            state.introdb.active_segment = cur_seg
+            state.introdb.button_shown_time = mp.get_time()
+            state.introdb.button_visible = true
+        else
+            -- Still in segment, check duration timeout
+            if user_opts.introdb_button_duration > 0 then
+                local elapsed = mp.get_time() - (state.introdb.button_shown_time or 0)
+                if elapsed >= user_opts.introdb_button_duration then
+                    state.introdb.button_visible = false
+                else
+                    state.introdb.button_visible = true
+                end
+            else
+                state.introdb.button_visible = true
+            end
+        end
+    else
+        state.introdb.active_segment = nil
+        state.introdb.button_visible = false
+        state.introdb.capsule_hitbox = nil
+    end
+end
+
+local function draw_skip_capsule_button(ass)
+    if not user_opts.introdb_enable or not state.introdb or not state.introdb.button_visible or not state.introdb.active_segment then
+        state.introdb.capsule_hitbox = nil
+        return
+    end
+
+    local seg = state.introdb.active_segment
+    local label = seg.label or (locale and locale.skip_intro or "Skip Intro")
+    local font_size = 14
+    local icon_font_name = icons and icons.iconfont or "modernz-icons"
+
+    -- Calculate capsule dimensions
+    local text_w = estimate_text_width(label, string.format("{\\fs%d}", font_size)) or 80
+    local icon_w = 18
+    local pad_h = 16
+    local total_w = text_w + icon_w + (pad_h * 2) + 6
+    local total_h = 32
+
+    local x2 = (osc_param.playresx or 1280) - 40
+    local x1 = x2 - total_w
+    local bottom_margin = state.osc_visible and (user_opts.osc_height + 30) or 40
+    local y2 = (osc_param.playresy or 720) - bottom_margin
+    local y1 = y2 - total_h
+
+    state.introdb.capsule_hitbox = { x1 = x1, y1 = y1, x2 = x2, y2 = y2 }
+
+    local hovered = mouse_hit_coords(x1, y1, x2, y2)
+    local bg_alpha = hovered and "20" or "60"
+    local border_color = hovered and "FFFFFF" or "C0C0C0"
+
+    -- 1. Draw rounded capsule pill background
+    ass:new_event()
+    ass:pos(0, 0)
+    ass:append(string.format("{\\blur0\\bord1\\1c&H1A1B26&\\1a&H%s&\\3c&H%s&\\3a&H40&}", bg_alpha, border_color))
+    ass:draw_start()
+    ass:round_rect_cw(x1, y1, x2, y2, total_h / 2)
+    ass:draw_stop()
+
+    -- 2. Draw forward icon
+    local icon_x = x1 + pad_h + (icon_w / 2)
+    local center_y = y1 + (total_h / 2)
+    ass:new_event()
+    ass:pos(icon_x, center_y)
+    ass:an(5)
+    ass:append(string.format("{\\fn%s\\fs%d\\1c&HFFFFFF&\\bord0}", icon_font_name, 16))
+    ass:append(icons and (icons.forward or icons.next) or ">|")
+
+    -- 3. Draw text label
+    local text_x = icon_x + (icon_w / 2) + 6
+    ass:new_event()
+    ass:pos(text_x, center_y)
+    ass:an(4)
+    ass:append(string.format("{\\fs%d\\b1\\1c&HFFFFFF&\\bord0}", font_size))
+    ass:append(label)
 end
 
 local function new_element(name, type)
@@ -3804,6 +4270,12 @@ local function process_event(source, what)
     if what == "down" or what == "press" then
         reset_timeout() -- clicking resets the hideosc timer
 
+        local hb = state.introdb and state.introdb.capsule_hitbox
+        if hb and mouse_hit_coords(hb.x1, hb.y1, hb.x2, hb.y2) and state.introdb.button_visible then
+            state.active_introdb_click = true
+            return
+        end
+
         for n = 1, #elements do
             if mouse_hit(elements[n]) and
                 elements[n].eventresponder and
@@ -3821,6 +4293,14 @@ local function process_event(source, what)
             end
         end
     elseif what == "up" then
+        local hb = state.introdb and state.introdb.capsule_hitbox
+        if hb and mouse_hit_coords(hb.x1, hb.y1, hb.x2, hb.y2) and state.introdb.button_visible and state.active_introdb_click then
+            state.active_introdb_click = false
+            skip_current_segment()
+            return
+        end
+        state.active_introdb_click = false
+
         if elements[state.active_element] then
             local n = state.active_element
 
@@ -3841,6 +4321,14 @@ local function process_event(source, what)
         state.mouse_down_counter = 0
     elseif source == "mouse_move" then
         state.mouse_in_window = true
+
+        if state.introdb and state.introdb.active_segment then
+            state.introdb.button_shown_time = mp.get_time()
+            if not state.introdb.button_visible then
+                state.introdb.button_visible = true
+                request_tick()
+            end
+        end
 
         local mouseX, mouseY = get_virt_mouse_pos()
         if user_opts.minmousemove == 0 or
@@ -4045,6 +4533,8 @@ local function render()
     -- actual rendering
     local ass = assdraw.ass_new()
 
+    check_introdb_segment_tick()
+
     if state.osc_visible or state.wc_visible then
         render_elements(ass, state.osc_visible, state.wc_visible)
     end
@@ -4052,6 +4542,8 @@ local function render()
     if user_opts.persistent_progress or state.persistent_progress_toggle then
         render_persistent_progress(ass)
     end
+
+    draw_skip_capsule_button(ass)
 
     -- submit
     set_osd(state.osd, osc_param.playresy * osc_param.display_aspect, osc_param.playresy, ass.text, 1000)
@@ -4160,11 +4652,30 @@ mp.register_event("file-loaded", function()
     local oos = user_opts.osc_on_start
     if oos == "bottom" or oos == "both" then show_osc() end
     if oos == "top" or oos == "both" then show_wc() end
+
+    if user_opts.introdb_enable then
+        resolve_media_metadata(function(meta)
+            if meta and meta.imdb_id then
+                fetch_introdb_segments(meta.imdb_id, meta.season, meta.episode, meta.is_movie)
+            end
+        end)
+    end
 end)
+
+mp.observe_property("user-data/metadata/imdb_id", "string", function(_, imdb_id)
+    if imdb_id and imdb_id ~= "" and user_opts.introdb_enable then
+        local season = mp.get_property_number("user-data/metadata/season") or mp.get_property_number("user-data/season")
+        local episode = mp.get_property_number("user-data/metadata/episode") or mp.get_property_number("user-data/episode")
+        local is_movie = mp.get_property_bool("user-data/metadata/is_movie") or mp.get_property_bool("user-data/is_movie") or (season == nil and episode == nil)
+        fetch_introdb_segments(imdb_id, season, episode, is_movie)
+    end
+end)
+
 mp.register_event("start-file", function()
     -- reset ab loop on new file start
     mp.set_property("ab-loop-a", "no")
     mp.set_property("ab-loop-b", "no")
+    reset_introdb_state()
     request_init()
 end)
 mp.observe_property("track-list", "native", update_tracklist)
@@ -4536,3 +5047,5 @@ set_virt_mouse_area(0, 0, 0, 0, "input_wheel")
 set_virt_mouse_area(0, 0, 0, 0, "input_mid")
 set_virt_mouse_area(0, 0, 0, 0, "window-controls")
 set_virt_mouse_area(0, 0, 0, 0, "window-controls-title")
+
+mp.add_key_binding(nil, "introdb-skip", skip_current_segment)
