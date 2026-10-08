@@ -22,6 +22,7 @@ A sleek and modern OSC for [mpv](https://mpv.io/). This project is a fork of Mod
 - 🌐 Multi-language support with JSON [locale](#translations) integration
 - ⌨️ Configurable controls [[details](#controls)]
 - 🖼️ Video thumbnail previews with [thumbfast](https://github.com/po5/thumbfast)
+- ⏩ Smart Skip Intro / Recap / Outro powered by [IntroDB](https://introdb.app/) with floating interactive capsule button and seekbar segment highlights [[details](#introdb-skip-intro)]
 
 <a href="/docs/INTERACTIVE_MENUS.md">
     <img width="350" alt="preview_features_button_md" src="https://github.com/user-attachments/assets/f7914071-0690-45ed-b1cf-6ced74f3a8e3" />
@@ -243,6 +244,39 @@ Not a fan of white buttons and text? You have complete control to customize colo
 </table>
 
 See the [Color Customization](/docs/USER_OPTS.md#colors-and-style) section in the configuration guide for details on how to customize colors and buttons.
+
+### IntroDB (Skip Intro)
+
+ModernZ natively integrates with [IntroDB](https://introdb.app/) to detect and skip intros, recaps, outros, and post-credits scenes in TV shows and movies:
+
+- **Floating Skip Button**: An interactive capsule button displays the countdown and segment title (e.g. `3:43 • Skip Intro`). Clicking it instantly jumps to the end of the segment. It appears for a configurable duration (`introdb_button_duration=7`, set `0` for full segment) above the seekbar (`bottom_right` or `bottom_center`).
+- **Seekbar Highlights & Boundary Notches**: Segment ranges are highlighted directly on the seekbar with solid contrast colors and distinct boundary notch ticks at start and end. Hovering over a highlighted segment displays the segment title in the tooltip.
+- **Auto-Skip**: Configure `introdb_auto_skip` (`no`, `all`, `intro`, `recap`, `outro`) to automatically skip segments without manual clicks.
+- **Metadata Resolution & Fallbacks**:
+  1. *Player / User Data*: Reads embedded `imdb_id` from mpv properties (e.g. from Stremio or Jellyfin plugins).
+  2. *Filename & NFO*: Detects IMDb ID tags (e.g. `tt1234567`) in the file path or adjacent `.nfo` files.
+  3. *GuessIt CLI (Optional Fallback)*: When no ID is found in the path, ModernZ can invoke `guessit` to parse the title, season, and episode from the filename and resolve its IMDb ID via Cinemeta.
+- **Theme Support**: Segment highlight colors are fully customizable and pre-configured for both the default palette and the official [Dracula Theme](#color-themes--presets).
+
+> [!NOTE]
+> **Requirements for IntroDB:**
+> - **`curl`**: Used for network requests to IntroDB and Cinemeta (pre-installed on Windows 10/11, macOS, and Linux).
+> - **`guessit` (Optional)**: Needed only if your media files do not contain embedded IMDb metadata, an IMDb ID in the filename/folder, or a local `.nfo` file.
+>   ```bash
+>   pip install guessit
+>   ```
+>   If `guessit` is not installed or not in your `PATH`, set `introdb_guessit_fallback=no` to disable this fallback without affecting hash or path-based lookups.
+
+```EditorConfig
+# Example IntroDB configuration in modernz.conf
+introdb_enable=yes
+introdb_auto_skip=no
+introdb_button_duration=7
+introdb_button_position=bottom_right
+introdb_show_highlights=yes
+introdb_range_alpha=0
+introdb_guessit_fallback=yes
+```
 
 ## Installation
 

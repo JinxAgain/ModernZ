@@ -206,6 +206,23 @@ watch-later-options-remove=osd-margin-y
 | persistent_progress_height    | 17       | height of the persistent progress bar                                                       |
 | persistent_buffer             | no       | show cached buffer status in the persistent progress line                                   |
 
+### IntroDB integration settings
+
+| Option                     | Value                    | Description                                                                                             |
+| -------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------- |
+| introdb_enable             | yes                      | enable IntroDB integration                                                                              |
+| introdb_api_url            | `https://api.introdb.app`| IntroDB API endpoint base URL                                                                           |
+| introdb_auto_skip          | no                       | auto-skip: `"no"`, `"all"`, or specific segment types like `"intro"`, `"recap"`, `"outro"`              |
+| introdb_button_duration    | 7                        | duration in seconds to display floating skip button upon entering segment (`0` = full segment duration)  |
+| introdb_button_position    | bottom_right             | position of floating skip button: `"bottom_right"` or `"bottom_center"`                                  |
+| introdb_show_highlights    | yes                      | show colored highlights on the seekbar for IntroDB segments                                             |
+| introdb_range_alpha        | 0                        | transparency of segment highlights on seekbar (0 - 255, `0` = solid)                                    |
+| introdb_intro_color        | `#5C7CFA`                | color of intro highlight (Dracula: `#50FA7B`)                                                           |
+| introdb_recap_color        | `#20C997`                | color of recap highlight (Dracula: `#8BE9FD`)                                                           |
+| introdb_outro_color        | `#FD7E14`                | color of outro highlight (Dracula: `#FFB86C`)                                                           |
+| introdb_post_credits_color | `#BE4BDB`                | color of post-credits highlight (Dracula: `#FF79C6`)                                                     |
+| introdb_guessit_fallback   | yes                      | enable guessit and search API fallback if user-data metadata is not present (requires `pip install guessit`) |
+
 ### Miscellaneous settings
 
 | Option                        | Value             | Description                                                   |
