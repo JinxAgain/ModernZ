@@ -681,7 +681,9 @@ local state = {
         button_shown_time = 0,
         button_visible = false,
         button_alpha = 255,
+        capsule_hitbox = nil,
     },
+    introdb_button_enabled = false,
 }
 
 local logo_lines = {
@@ -2073,7 +2075,14 @@ local function reset_introdb_state()
         button_shown_time = 0,
         button_visible = false,
         button_alpha = 255,
+        capsule_hitbox = nil,
     }
+    state.active_introdb_click = false
+    set_virt_mouse_area(0, 0, 0, 0, "introdb_button")
+    if state.introdb_button_enabled then
+        mp.disable_key_bindings("introdb_button")
+        state.introdb_button_enabled = false
+    end
 end
 
 local function parse_introdb_response(json_str)
@@ -2317,6 +2326,11 @@ local function skip_current_segment()
         state.introdb.active_segment = nil
         state.introdb.button_visible = false
         state.introdb.capsule_hitbox = nil
+        set_virt_mouse_area(0, 0, 0, 0, "introdb_button")
+        if state.introdb_button_enabled then
+            mp.disable_key_bindings("introdb_button")
+            state.introdb_button_enabled = false
+        end
         request_tick()
     end
 end
@@ -2376,6 +2390,11 @@ end
 local function draw_skip_capsule_button(ass)
     if not user_opts.introdb_enable or not state.introdb or not state.introdb.button_visible or not state.introdb.active_segment then
         state.introdb.capsule_hitbox = nil
+        set_virt_mouse_area(0, 0, 0, 0, "introdb_button")
+        if state.introdb_button_enabled then
+            mp.disable_key_bindings("introdb_button")
+            state.introdb_button_enabled = false
+        end
         return
     end
 
@@ -2391,13 +2410,28 @@ local function draw_skip_capsule_button(ass)
     local total_w = text_w + icon_w + (pad_h * 2) + 6
     local total_h = 32
 
-    local x2 = (osc_param.playresx or 1280) - 40
-    local x1 = x2 - total_w
-    local bottom_margin = state.osc_visible and (user_opts.osc_height + 30) or 40
-    local y2 = (osc_param.playresy or 720) - bottom_margin
+    local resx = (osc_param.playresx and osc_param.playresx > 0) and osc_param.playresx or 1280
+    local resy = (osc_param.playresy and osc_param.playresy > 0) and osc_param.playresy or 720
+
+    local x1, x2
+    if user_opts.introdb_button_position == "bottom_center" then
+        x1 = math.floor((resx - total_w) / 2)
+        x2 = x1 + total_w
+    else
+        x2 = resx - 40
+        x1 = x2 - total_w
+    end
+
+    local bottom_margin = user_opts.osc_height + 25
+    local y2 = resy - bottom_margin
     local y1 = y2 - total_h
 
     state.introdb.capsule_hitbox = { x1 = x1, y1 = y1, x2 = x2, y2 = y2 }
+    set_virt_mouse_area(x1, y1, x2, y2, "introdb_button")
+    if not state.introdb_button_enabled then
+        mp.enable_key_bindings("introdb_button")
+        state.introdb_button_enabled = true
+    end
 
     local hovered = mouse_hit_coords(x1, y1, x2, y2)
     local bg_alpha = hovered and "20" or "60"
@@ -2427,6 +2461,16 @@ local function draw_skip_capsule_button(ass)
     ass:an(4)
     ass:append(string.format("{\\fs%d\\b1\\1c&HFFFFFF&\\bord0}", font_size))
     ass:append(label)
+end
+
+local function is_mouse_over_skip_button(pad)
+    if not user_opts.introdb_enable or not state.introdb or not state.introdb.button_visible then
+        return false
+    end
+    local hb = state.introdb.capsule_hitbox
+    if not hb then return false end
+    pad = pad or 0
+    return mouse_hit_coords(hb.x1 - pad, hb.y1 - pad, hb.x2 + pad, hb.y2 + pad)
 end
 
 local function new_element(name, type)
@@ -4268,6 +4312,7 @@ local function process_event(source, what)
     local action = string.format("%s%s", source, what and ("_" .. what) or "")
 
     if what == "down" or what == "press" then
+        state.mouse_in_window = true
         reset_timeout() -- clicking resets the hideosc timer
 
         local hb = state.introdb and state.introdb.capsule_hitbox
@@ -4335,19 +4380,26 @@ local function process_event(source, what)
             ((state.last_mouseX ~= nil and state.last_mouseY ~= nil) and
                 (math.abs(mouseX - state.last_mouseX) >= user_opts.minmousemove or
                  math.abs(mouseY - state.last_mouseY) >= user_opts.minmousemove)) then
+            local over_skip_button = is_mouse_over_skip_button(10)
             if window_controls_enabled() and user_opts.windowcontrols_independent then
                 if mouse_in_area("showhide_wc") then
                     show_wc()
                 elseif user_opts.visibility ~= "always" and user_opts.deadzone_hide ~= "timeout" then
                     hide_wc()
                 end
-                if mouse_in_area("showhide") then
+                if mouse_in_area("showhide") and not over_skip_button then
                     show_osc()
+                elseif over_skip_button then
+                    if state.osc_visible then
+                        state.showtime = mp.get_time()
+                    end
                 elseif user_opts.visibility ~= "always" and not state.keeponpause_active and user_opts.deadzone_hide ~= "timeout" then
                     hide_osc()
                 end
             else
-                show_osc()
+                if not over_skip_button or state.osc_visible then
+                    show_osc()
+                end
                 if window_controls_enabled() then show_wc() end
             end
         end
@@ -4388,6 +4440,11 @@ local function enable_osc(enable)
             mp.disable_key_bindings("showhide")
             mp.disable_key_bindings("showhide_wc")
         end
+        if state.introdb_button_enabled then
+            mp.disable_key_bindings("introdb_button")
+            state.introdb_button_enabled = false
+        end
+        set_virt_mouse_area(0, 0, 0, 0, "introdb_button")
         state.showhide_enabled = false
     end
 end
@@ -4501,8 +4558,9 @@ local function render()
         local timeout = state[showtime_key] + (hide_timeout / 1000) - now
         if timeout <= 0 and get_touchtimeout() <= 0 then
             -- a hold in the bottom bar should not prevent the top bar from hiding, and vice versa.
-            local element_blocks_hide = state.active_element ~= nil and mouse_in_area(input_areas)
-            if not element_blocks_hide and (not user_opts.keep_with_cursor or not mouse_in_area(input_areas)) then
+            local is_skip_hovered = is_mouse_over_skip_button(10)
+            local element_blocks_hide = (state.active_element ~= nil and mouse_in_area(input_areas)) or is_skip_hovered
+            if not element_blocks_hide and (not user_opts.keep_with_cursor or not (mouse_in_area(input_areas) or is_skip_hovered)) then
                 hide_fn()
             end
         else
@@ -4801,6 +4859,14 @@ mp.set_key_bindings({
 }, "window-controls-ontop", "force")
 set_virt_mouse_area(0, 0, 0, 0, "window-controls-ontop")
 
+mp.set_key_bindings({
+    {"mbtn_left",           function() process_event("mbtn_left", "up") end,
+                            function() process_event("mbtn_left", "down")  end},
+    {"mbtn_left_dbl",       "ignore"},
+    {"mouse_move",          function() process_event("mouse_move", nil) end},
+}, "introdb_button", "force")
+set_virt_mouse_area(0, 0, 0, 0, "introdb_button")
+
 local function always_on(val)
     if state.enabled then
         if val then
@@ -4855,6 +4921,10 @@ local function visibility_mode(mode, no_osd)
     mp.disable_key_bindings("window-controls")
     mp.disable_key_bindings("window-controls-title")
     mp.disable_key_bindings("window-controls-ontop")
+    if state.introdb_button_enabled then
+        mp.disable_key_bindings("introdb_button")
+        state.introdb_button_enabled = false
+    end
     state.input_enabled = false
     state.windowcontrols_buttons = false
     state.windowcontrols_title = false
@@ -5047,5 +5117,6 @@ set_virt_mouse_area(0, 0, 0, 0, "input_wheel")
 set_virt_mouse_area(0, 0, 0, 0, "input_mid")
 set_virt_mouse_area(0, 0, 0, 0, "window-controls")
 set_virt_mouse_area(0, 0, 0, 0, "window-controls-title")
+set_virt_mouse_area(0, 0, 0, 0, "introdb_button")
 
 mp.add_key_binding(nil, "introdb-skip", skip_current_segment)

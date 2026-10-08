@@ -20,6 +20,7 @@ f:close()
 assert_true(content:find("draw_skip_capsule_button"), "modernz.lua missing draw_skip_capsule_button")
 assert_true(content:find("check_introdb_segment_tick"), "modernz.lua missing check_introdb_segment_tick")
 assert_true(content:find("introdb%-skip"), "modernz.lua missing introdb-skip script-binding")
+assert_true(content:find('"introdb_button"'), 'modernz.lua missing "introdb_button" keybindings section')
 
 msg.info("ALL SKIP BUTTON TESTS PASSED")
 mp.commandv("quit", 0)
