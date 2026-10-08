@@ -168,6 +168,15 @@ Both `fluent` and `material` themes have different icon styles as well. By using
     </tbody>
 </table>
 
+### Color Themes & Presets
+
+ModernZ supports extensive color customization. In addition to the default configuration, a dedicated **Dracula Theme** preset based on the official [Dracula Theme](https://github.com/dracula/dracula-theme) palette is available:
+- [`modernz-dracula.conf`](modernz-dracula.conf) / [`themes/dracula.conf`](themes/dracula.conf)
+
+To use it, copy the file into your mpv `script-opts/` directory as `modernz.conf`:
+- **Windows**: `%APPDATA%/mpv/script-opts/modernz.conf`
+- **Linux / macOS**: `~/.config/mpv/script-opts/modernz.conf`
+
 ### Seek Bar
 
 If you find the seek bar too thin or too thick, you can easily adjust its size using the `seekbar_height` option. Available values include `small`, `medium`, `large`, and `xlarge`.

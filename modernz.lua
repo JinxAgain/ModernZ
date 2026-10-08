@@ -205,7 +205,7 @@ local user_opts = {
     introdb_button_duration = 7,           -- seconds to show skip button upon entering segment (0 = full segment)
     introdb_button_position = "bottom_right", -- skip button position: "bottom_right" or "bottom_center"
     introdb_show_highlights = true,        -- show segment highlights on the seekbar
-    introdb_range_alpha = 150,             -- alpha of segment highlights on seekbar (0 - 255)
+    introdb_range_alpha = 0,               -- alpha of segment highlights on seekbar (0 - 255, 0 = solid)
     introdb_intro_color = "#5C7CFA",       -- color of intro highlight
     introdb_recap_color = "#20C997",       -- color of recap highlight
     introdb_outro_color = "#FD7E14",       -- color of outro highlight
@@ -1498,6 +1498,12 @@ local function draw_introdb_ranges(element, elem_ass)
         post_credits = user_opts.introdb_post_credits_color or "#BE4BDB",
     }
 
+    local track_top = math.max(0, slider_lo.gap - 1)
+    local track_bot = math.min(elem_geo.h, elem_geo.h - slider_lo.gap + 1)
+    local tick_top = math.max(0, slider_lo.gap - 2.5)
+    local tick_bot = math.min(elem_geo.h, elem_geo.h - slider_lo.gap + 2.5)
+    local tick_half = 1.0
+
     for _, seg in ipairs(state.introdb.segments) do
         local color = type_colors[seg.type] or user_opts.introdb_intro_color
         local ax = get_slider_ele_pos_for(element, math.max(0, seg.start_sec) / state.duration * 100)
@@ -1506,7 +1512,7 @@ local function draw_introdb_ranges(element, elem_ass)
         if bx > ax then
             elem_ass:draw_stop()
             elem_ass:merge(element.style_ass)
-            ass_append_alpha(elem_ass, element.layout.alpha, user_opts.introdb_range_alpha or 150)
+            ass_append_alpha(elem_ass, element.layout.alpha, user_opts.introdb_range_alpha or 0)
             elem_ass:append("{\\1c&H" .. osc_color_convert(color) .. "&}")
             elem_ass:merge(element.static_ass)
 
@@ -1516,7 +1522,7 @@ local function draw_introdb_ranges(element, elem_ass)
                 if gap_r > ax and gap_l < bx then
                     local sl, sr = seg_start, math.min(gap_l, bx)
                     if sr > sl then
-                        elem_ass:round_rect_cw(sl, slider_lo.gap, sr, elem_geo.h - slider_lo.gap, (sl == ax and sl < element.slider.min.ele_pos) and radius or 0, 0)
+                        elem_ass:round_rect_cw(sl, track_top, sr, track_bot, (sl == ax and sl < element.slider.min.ele_pos) and radius or 0, 0)
                     end
                     seg_start = math.max(gap_r, ax)
                 end
@@ -1525,7 +1531,17 @@ local function draw_introdb_ranges(element, elem_ass)
             if sr > sl then
                 local r_right = (sr >= elem_geo.w or sr > element.slider.max.ele_pos) and radius or 0
                 local r_left = (sl == ax and sl < element.slider.min.ele_pos) and radius or 0
-                elem_ass:round_rect_cw(sl, slider_lo.gap, sr, elem_geo.h - slider_lo.gap, r_left, r_right)
+                elem_ass:round_rect_cw(sl, track_top, sr, track_bot, r_left, r_right)
+            end
+
+            -- Prominent boundary notch ticks at start and end of segment
+            local ax_l, ax_r = math.max(0, ax - tick_half), math.min(elem_geo.w, ax + tick_half)
+            local bx_l, bx_r = math.max(0, bx - tick_half), math.min(elem_geo.w, bx + tick_half)
+            if ax_r > ax_l then
+                elem_ass:round_rect_cw(ax_l, tick_top, ax_r, tick_bot, 1, 1)
+            end
+            if bx_r > bx_l then
+                elem_ass:round_rect_cw(bx_l, tick_top, bx_r, tick_bot, 1, 1)
             end
         end
     end
@@ -2435,12 +2451,13 @@ local function draw_skip_capsule_button(ass)
 
     local hovered = mouse_hit_coords(x1, y1, x2, y2)
     local bg_alpha = hovered and "20" or "60"
-    local border_color = hovered and "FFFFFF" or "C0C0C0"
+    local bg_color = osc_color_convert(user_opts.osc_color)
+    local border_color = hovered and osc_color_convert(user_opts.hover_effect_color) or "C0C0C0"
 
     -- 1. Draw rounded capsule pill background
     ass:new_event()
     ass:pos(0, 0)
-    ass:append(string.format("{\\blur0\\bord1\\1c&H1A1B26&\\1a&H%s&\\3c&H%s&\\3a&H40&}", bg_alpha, border_color))
+    ass:append(string.format("{\\blur0\\bord1\\1c&H%s&\\1a&H%s&\\3c&H%s&\\3a&H40&}", bg_color, bg_alpha, border_color))
     ass:draw_start()
     ass:round_rect_cw(x1, y1, x2, y2, total_h / 2)
     ass:draw_stop()
