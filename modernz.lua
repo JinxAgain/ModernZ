@@ -2420,10 +2420,20 @@ local function draw_skip_capsule_button(ass)
     local icon_font_name = icons and icons.iconfont or "modernz-icons"
 
     -- Calculate capsule dimensions
-    local text_w = estimate_text_width(label, string.format("{\\fs%d}", font_size)) or 80
-    local icon_w = 18
+    local font_tag = (user_opts.font and user_opts.font ~= "") and ("\\fn" .. user_opts.font) or ""
+    local text_measure_style = string.format("{\\fs%d\\b1%s}", font_size, font_tag)
+    local text_w = estimate_text_width(label, text_measure_style)
+    if not text_w or text_w <= 0 then
+        text_w = math.floor(#label * font_size * 0.75)
+    else
+        -- Compensate for libass side-bearing subtraction in estimate_text_width
+        text_w = math.ceil(text_w + (font_size * 0.16))
+    end
     local pad_h = 16
-    local total_w = text_w + icon_w + (pad_h * 2) + 6
+    local icon_w = 12
+    local gap = 6
+    local content_w = icon_w + gap + text_w
+    local total_w = (pad_h * 2) + content_w
     local total_h = 32
 
     local resx = (osc_param.playresx and osc_param.playresx > 0) and osc_param.playresx or 1280
@@ -2442,6 +2452,12 @@ local function draw_skip_capsule_button(ass)
     local y2 = resy - bottom_margin
     local y1 = y2 - total_h
 
+    local cx = math.floor((x1 + x2) / 2)
+    local cy = math.floor(y1 + (total_h / 2))
+    local content_start = cx - math.floor(content_w / 2)
+    local icon_x = content_start + math.floor(icon_w / 2)
+    local text_x = content_start + icon_w + gap + math.floor(text_w / 2)
+
     state.introdb.capsule_hitbox = { x1 = x1, y1 = y1, x2 = x2, y2 = y2 }
     set_virt_mouse_area(x1, y1, x2, y2, "introdb_button")
     if not state.introdb_button_enabled then
@@ -2456,27 +2472,28 @@ local function draw_skip_capsule_button(ass)
 
     -- 1. Draw rounded capsule pill background
     ass:new_event()
+    ass:append("{\\rDefault}")
     ass:pos(0, 0)
+    ass:an(7)
     ass:append(string.format("{\\blur0\\bord1\\1c&H%s&\\1a&H%s&\\3c&H%s&\\3a&H40&}", bg_color, bg_alpha, border_color))
     ass:draw_start()
     ass:round_rect_cw(x1, y1, x2, y2, total_h / 2)
     ass:draw_stop()
 
     -- 2. Draw forward icon
-    local icon_x = x1 + pad_h + (icon_w / 2)
-    local center_y = y1 + (total_h / 2)
     ass:new_event()
-    ass:pos(icon_x, center_y)
+    ass:append("{\\rDefault}")
+    ass:pos(icon_x, cy)
     ass:an(5)
     ass:append(string.format("{\\fn%s\\fs%d\\1c&HFFFFFF&\\bord0}", icon_font_name, 16))
     ass:append(icons and (icons.forward or icons.next) or ">|")
 
-    -- 3. Draw text label
-    local text_x = icon_x + (icon_w / 2) + 6
+    -- 3. Draw text label (centered in its slot to maintain optical symmetry at all scales)
     ass:new_event()
-    ass:pos(text_x, center_y)
-    ass:an(4)
-    ass:append(string.format("{\\fs%d\\b1\\1c&HFFFFFF&\\bord0}", font_size))
+    ass:append("{\\rDefault}")
+    ass:pos(text_x, cy)
+    ass:an(5)
+    ass:append(string.format("{\\fs%d\\b1%s\\1c&HFFFFFF&\\bord0}", font_size, font_tag))
     ass:append(label)
 end
 
